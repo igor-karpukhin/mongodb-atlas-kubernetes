@@ -10,8 +10,7 @@ require (
 	github.com/Azure/go-autorest/autorest/validation v0.3.1 // indirect
 	github.com/aws/aws-sdk-go v1.42.25
 	github.com/fatih/structtag v1.2.0
-	github.com/go-logr/logr v0.4.0 // indirect
-	github.com/go-logr/zapr v0.4.0
+	github.com/go-logr/zapr v1.2.2
 	github.com/golang/snappy v0.0.2 // indirect
 	github.com/google/go-cmp v0.5.6
 	github.com/mongodb-forks/digest v1.0.3
