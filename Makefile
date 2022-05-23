@@ -12,6 +12,8 @@ ifndef PRODUCT_VERSION
 PRODUCT_VERSION := $(shell git describe --tags --dirty --broken)
 endif
 
+CONTAINER_ENGINE?=docker
+
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "preview,fast,stable")
 # To re-generate a bundle for other specific channels without changing the standard setup, you can:
@@ -115,6 +117,8 @@ manifests: controller-gen ## Generate manifests e.g. CRD, RBAC etc.
 .PHONY: fmt
 fmt: ## Run go fmt against code
 	go fmt ./...
+	find . -name "*.go" -not -path "./vendor/*" -exec gofmt -w "{}" \;
+	find . -name "*.go" -not -path "./vendor/*" -exec goimports -l "{}" \;
 
 .PHONY: vet
 vet: ## Run go vet against code
@@ -133,7 +137,7 @@ controller-gen: ## Download controller-gen locally if necessary
 .PHONY: kustomize
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary
-	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v4@v4.0.1)
+	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v4@v4.5.4)
 
 # go-get-tool will 'go install' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -150,24 +154,24 @@ rm -rf $$TMP_DIR ;\
 endef
 
 .PHONY: bundle
-bundle: manifests kustomize ## Generate bundle manifests and metadata, then validate generated files.
+bundle: manifests kustomize ## Generate bundle manifests and metadata, update security context for OpenShift, then validate generated files.
 	operator-sdk generate kustomize manifests -q --apis-dir=pkg/api
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(OPERATOR_IMAGE)
+	$(KUSTOMIZE) build --load-restrictor LoadRestrictionsNone config/manifests | operator-sdk generate bundle -q --overwrite --manifests --version $(VERSION) $(BUNDLE_METADATA_OPTS)
 	operator-sdk bundle validate ./bundle
 
 .PHONY: image
 image: manager ## Build the operator image
-	docker build -t $(OPERATOR_IMAGE) .
-	docker push $(OPERATOR_IMAGE)
+	$(CONTAINER_ENGINE) build -t $(OPERATOR_IMAGE) .
+	$(CONTAINER_ENGINE) push $(OPERATOR_IMAGE)
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
-	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+	$(CONTAINER_ENGINE) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
 
 .PHONY: bundle-push
 bundle-push: bundle bundle-build ## Publish the bundle image
-	docker push $(BUNDLE_IMG)
+	$(CONTAINER_ENGINE) push $(BUNDLE_IMG)
 
 .PHONY: catalog-build
 CATALOG_DIR ?= ./scripts/openshift/atlas-catalog
@@ -183,7 +187,7 @@ catalog-build: ## bundle bundle-push ## Build file-based bundle
 
 .PHONY: catalog-push
 catalog-push:
-	docker push $(CATALOG_IMAGE)
+	$(CONTAINER_ENGINE) push $(CATALOG_IMAGE)
 
 .PHONY: build-subscription
 build-subscription:
@@ -216,7 +220,7 @@ deploy-olm: bundle-build bundle-push catalog-build catalog-push build-catalogsou
 
 .PHONY: docker-push
 docker-push: ## Push the docker image
-	docker push ${IMG}
+	$(CONTAINER_ENGINE) push $(OPERATOR_IMAGE)
 
 # Additional make goals
 .PHONY: run-kind
@@ -243,5 +247,5 @@ post-install-hook:
 	chmod +x bin/helm-post-install
 
 .PHONY: x509-cert
-x509-cert: ## Create X.509 cert at path tmp/x509/ (see docs/dev/x509-user.md)
+x509-cert: ## Create X.509 cert at path tmp/x509/ (see docs/x509-user.md)
 	go run scripts/create_x509.go
