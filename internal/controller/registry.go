@@ -8,7 +8,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/atlas"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/atlasbackupcompliancepolicy"
@@ -21,6 +20,7 @@ import (
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/atlasproject"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/atlassearchindexconfig"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/atlasstream"
+	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/dryrun"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/featureflags"
 )
 
@@ -28,8 +28,8 @@ type ManagerAware interface {
 	SetupWithManager(mgr ctrl.Manager, skipNameValidation bool) error
 }
 
-type AkoReconciler interface {
-	reconcile.Reconciler
+type Reconciler interface {
+	dryrun.Reconciler
 	ManagerAware
 }
 
@@ -40,7 +40,7 @@ type Registry struct {
 	featureFlags          *featureflags.FeatureFlags
 
 	logger      *zap.Logger
-	reconcilers []AkoReconciler
+	reconcilers []Reconciler
 }
 
 func NewRegistry(predicates []predicate.Predicate, deletionProtection bool, logger *zap.Logger, independentSyncPeriod time.Duration, featureFlags *featureflags.FeatureFlags) *Registry {
@@ -51,6 +51,16 @@ func NewRegistry(predicates []predicate.Predicate, deletionProtection bool, logg
 		independentSyncPeriod: independentSyncPeriod,
 		featureFlags:          featureFlags,
 	}
+}
+
+func (r *Registry) RegisterWithDryRunManager(mgr *dryrun.Manager, ap atlas.Provider) error {
+	r.registerControllers(mgr, ap)
+
+	for _, reconciler := range r.reconcilers {
+		mgr.SetupReconciler(reconciler)
+	}
+
+	return nil
 }
 
 func (r *Registry) RegisterWithManager(mgr ctrl.Manager, skipNameValidation bool, ap atlas.Provider) error {
@@ -65,7 +75,11 @@ func (r *Registry) RegisterWithManager(mgr ctrl.Manager, skipNameValidation bool
 }
 
 func (r *Registry) registerControllers(c cluster.Cluster, ap atlas.Provider) {
-	var reconcilers []AkoReconciler
+	if len(r.reconcilers) > 0 {
+		return
+	}
+
+	var reconcilers []Reconciler
 	reconcilers = append(reconcilers, atlasproject.NewAtlasProjectReconciler(c, r.predicates, ap, r.deletionProtection, r.logger))
 	reconcilers = append(reconcilers, atlasdeployment.NewAtlasDeploymentReconciler(c, r.predicates, ap, r.deletionProtection, r.independentSyncPeriod, r.logger))
 	reconcilers = append(reconcilers, atlasdatabaseuser.NewAtlasDatabaseUserReconciler(c, r.predicates, ap, r.deletionProtection, r.independentSyncPeriod, r.featureFlags, r.logger))
