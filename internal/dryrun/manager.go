@@ -52,8 +52,8 @@ func (m *Manager) executeDryRun(ctx context.Context) error {
 	}
 
 	for _, reconciler := range m.reconcilers {
-		originalRresource, _ := reconciler.For()
-		resource := originalRresource.DeepCopyObject() // don't mutate the prototype
+		originalResource, _ := reconciler.For()
+		resource := originalResource.DeepCopyObject() // don't mutate the prototype
 
 		// build GVK
 		if resource.GetObjectKind().GroupVersionKind().Empty() {
