@@ -19,6 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const dryRunComponent = "DryRun Manager"
+
 type Reconciler interface {
 	reconcile.Reconciler
 	For() (client.Object, builder.Predicates)
@@ -47,6 +49,8 @@ func (m *Manager) SetupReconciler(r Reconciler) {
 }
 
 func (m *Manager) executeDryRun(ctx context.Context) error {
+	enableErrors()
+
 	if !m.Cluster.GetCache().WaitForCacheSync(ctx) {
 		return errors.New("cluster cache sync failed")
 	}
@@ -81,11 +85,20 @@ func (m *Manager) executeDryRun(ctx context.Context) error {
 		for _, item := range list.Items {
 			req := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&item)}
 			if _, err := reconciler.Reconcile(ctx, req); err != nil {
+				m.reportError(ctx, err)
 				return fmt.Errorf("unable to reconcile item %v: %w", item, err)
+			}
+
+			for _, err := range allErrors() {
+				m.reportError(err)
 			}
 		}
 	}
 	return nil
+}
+
+func (m *Manager) reportError(ctx context.Context, err error) {
+	obj, ok := runtimeObjectFrom(ctx)
 }
 
 // Start executes the dry-run and returns immediately.
@@ -124,7 +137,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if job.Name == "" || job.Namespace == "" {
 		m.logger.Warn("dry run finished: not running as a Job, skipping event emission")
 	} else {
-		m.Cluster.GetEventRecorderFor("DryRun Manager").Event(job, corev1.EventTypeNormal, DryRunReason, "dry run finished")
+		m.Cluster.GetEventRecorderFor(dryRunComponent).Event(job, corev1.EventTypeNormal, DryRunReason, "dry run finished")
 	}
 
 	stopCluster()
