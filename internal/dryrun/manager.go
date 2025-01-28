@@ -90,7 +90,7 @@ func (m *Manager) executeDryRun(ctx context.Context) error {
 			}
 
 			for _, err := range allErrors() {
-				m.reportError(err)
+				m.reportError(ctx, err)
 			}
 		}
 	}
@@ -98,7 +98,7 @@ func (m *Manager) executeDryRun(ctx context.Context) error {
 }
 
 func (m *Manager) reportError(ctx context.Context, err error) {
-	obj, ok := runtimeObjectFrom(ctx)
+	//obj, ok := runtimeObjectFrom(ctx)
 }
 
 // Start executes the dry-run and returns immediately.
