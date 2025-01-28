@@ -1,6 +1,9 @@
 package dryrun
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 type errorQueue struct {
 	mu sync.Mutex // protects fields below
@@ -11,7 +14,7 @@ type errorQueue struct {
 
 var reconcileErrors = &errorQueue{}
 
-func AddError(err error) {
+func AddTerminationError(err error) {
 	reconcileErrors.mu.Lock()
 	defer reconcileErrors.mu.Unlock()
 
@@ -22,7 +25,7 @@ func AddError(err error) {
 	reconcileErrors.errs = append(reconcileErrors.errs, err)
 }
 
-func allErrors() []error {
+func terminationError() error {
 	reconcileErrors.mu.Lock()
 	defer reconcileErrors.mu.Unlock()
 
@@ -31,9 +34,14 @@ func allErrors() []error {
 		result = append(result, err)
 	}
 
-	reconcileErrors.errs = nil // clear queue
+	return errors.Join(result...)
+}
 
-	return result
+func clearTerminationErrors() {
+	reconcileErrors.mu.Lock()
+	defer reconcileErrors.mu.Unlock()
+
+	reconcileErrors.errs = nil
 }
 
 func enableErrors() {

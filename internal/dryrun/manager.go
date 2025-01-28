@@ -12,7 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
@@ -24,6 +26,19 @@ const dryRunComponent = "DryRun Manager"
 type Reconciler interface {
 	reconcile.Reconciler
 	For() (client.Object, builder.Predicates)
+}
+
+type terminationAwareReconciler struct {
+	Reconciler
+}
+
+func (t *terminationAwareReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	clearTerminationErrors()
+	result, err := t.Reconciler.Reconcile(ctx, req)
+	if err != nil {
+		return result, err
+	}
+	return result, terminationError()
 }
 
 // Manager is a controller-runtime runnable
@@ -45,7 +60,7 @@ func NewManager(c cluster.Cluster, logger *zap.Logger) *Manager {
 }
 
 func (m *Manager) SetupReconciler(r Reconciler) {
-	m.reconcilers = append(m.reconcilers, r)
+	m.reconcilers = append(m.reconcilers, &terminationAwareReconciler{Reconciler: r})
 }
 
 func (m *Manager) executeDryRun(ctx context.Context) error {
@@ -61,18 +76,9 @@ func (m *Manager) executeDryRun(ctx context.Context) error {
 
 		// build GVK
 		if resource.GetObjectKind().GroupVersionKind().Empty() {
-			gvks, _, err := m.Cluster.GetScheme().ObjectKinds(resource)
-			if err != nil {
-				return fmt.Errorf("unable to determine GVK for resource %T: %w", resource, err)
+			if err := buildGVK(m.Cluster, resource); err != nil {
+				return err
 			}
-			if len(gvks) == 0 {
-				return fmt.Errorf("no GVKs present for resource %T", resource)
-			}
-			objectKind, ok := resource.(schema.ObjectKind)
-			if !ok {
-				return fmt.Errorf("unable to set GVK for resource %T: %w", resource, err)
-			}
-			objectKind.SetGroupVersionKind(gvks[len(gvks)-1]) // set the latest version, it's what our local specs follow
 		}
 
 		list := &unstructured.UnstructuredList{}
@@ -84,21 +90,50 @@ func (m *Manager) executeDryRun(ctx context.Context) error {
 
 		for _, item := range list.Items {
 			req := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&item)}
+			if err := m.Cluster.GetScheme().Convert(&item, resource, nil); err != nil {
+				return fmt.Errorf("unable to convert item %T: %w", item, err)
+			}
 			if _, err := reconciler.Reconcile(ctx, req); err != nil {
-				m.reportError(ctx, err)
-				return fmt.Errorf("unable to reconcile item %v: %w", item, err)
+				m.reportError(resource, err)
 			}
-
-			for _, err := range allErrors() {
-				m.reportError(ctx, err)
-			}
+			m.Cluster.GetEventRecorderFor(dryRunComponent).Event(resource, corev1.EventTypeWarning, DryRunReason, "finished dry run")
 		}
 	}
 	return nil
 }
 
-func (m *Manager) reportError(ctx context.Context, err error) {
-	//obj, ok := runtimeObjectFrom(ctx)
+func buildGVK(c cluster.Cluster, resource runtime.Object) error {
+	gvks, _, err := c.GetScheme().ObjectKinds(resource)
+	if err != nil {
+		return fmt.Errorf("unable to determine GVK for resource %T: %w", resource, err)
+	}
+	if len(gvks) == 0 {
+		return fmt.Errorf("no GVKs present for resource %T", resource)
+	}
+	objectKind, ok := resource.(schema.ObjectKind)
+	if !ok {
+		return fmt.Errorf("unable to set GVK for resource %T: %w", resource, err)
+	}
+	objectKind.SetGroupVersionKind(gvks[len(gvks)-1]) // set the latest version, it's what our local specs follow
+	return nil
+}
+
+func (m *Manager) reportError(obj runtime.Object, err error) {
+	if IsDryRunError(err) {
+		return
+	}
+
+	m.logger.Error(err.Error())
+	m.Cluster.GetEventRecorderFor(dryRunComponent).Event(obj, corev1.EventTypeWarning, DryRunReason, err.Error())
+}
+
+func (m *Manager) object() runtime.Object {
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      os.Getenv("JOB_NAME"),
+			Namespace: os.Getenv("JOB_NAMESPACE"),
+		},
+	}
 }
 
 // Start executes the dry-run and returns immediately.
@@ -123,21 +158,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 	}()
 
-	if dryRunErr := m.executeDryRun(cancelCtx); dryRunErr != nil {
+	if err := m.executeDryRun(cancelCtx); err != nil {
 		stopCluster() // opportunistically stop the Cluster object.
-		return dryRunErr
-	}
-
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      os.Getenv("JOB_NAME"),
-			Namespace: os.Getenv("JOB_NAMESPACE"),
-		},
-	}
-	if job.Name == "" || job.Namespace == "" {
-		m.logger.Warn("dry run finished: not running as a Job, skipping event emission")
-	} else {
-		m.Cluster.GetEventRecorderFor(dryRunComponent).Event(job, corev1.EventTypeNormal, DryRunReason, "dry run finished")
+		return err
 	}
 
 	stopCluster()

@@ -43,7 +43,7 @@ func Requeue(period time.Duration) Result {
 // 'reason' and 'message' indicate the error state and are supposed to be reflected in the `conditions` for the
 // reconciled Custom Resource.
 func Terminate(reason ConditionReason, err error) Result {
-	dryrun.AddError(err) // TODO: factor this in favor of controller-runtime error handling
+	dryrun.AddTerminationError(err) // TODO: factor this in favor of controller-runtime error handling
 
 	return Result{
 		terminated:   true,
@@ -82,6 +82,8 @@ func (r Result) IsDeleted() bool {
 // TerminateSilently indicates that the reconciliation logic cannot proceed and needs to be finished (and possibly requeued)
 // The status of the reconciled Custom Resource is not supposed to be updated.
 func TerminateSilently(err error) Result {
+	dryrun.AddTerminationError(err)
+
 	return Result{terminated: true, requeueAfter: DefaultRetry}
 }
 

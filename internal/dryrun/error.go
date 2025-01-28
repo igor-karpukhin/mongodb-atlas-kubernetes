@@ -1,6 +1,7 @@
 package dryrun
 
 import (
+	"errors"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,4 +43,13 @@ func (e *DryRunError) Error() string {
 		"DryRun event GVK=%v, Namespace=%v, Name=%v, EventType=%v, Reason=%v, Message=%v",
 		e.GVK, e.Namespace, e.Name, e.EventType, e.Reason, e.Msg,
 	)
+}
+
+func IsDryRunError(err error) bool {
+	dErr := &DryRunError{}
+	return errors.As(err, &dErr)
+}
+
+func IsNotDryRunError(err error) bool {
+	return !IsDryRunError(err)
 }

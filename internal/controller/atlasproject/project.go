@@ -13,6 +13,7 @@ import (
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/api/v1/status"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/customresource"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/controller/workflow"
+	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/dryrun"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/indexer"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/internal/translation/project"
 )
@@ -34,11 +35,14 @@ func (r *AtlasProjectReconciler) handleProject(ctx *workflow.Context, orgID stri
 		return r.delete(ctx, services, orgID, atlasProject)
 	case !existInAtlas && wasDeleted:
 		return r.release(ctx, atlasProject)
-	case existInAtlas && !wasDeleted && atlasProject.Status.ID == "":
-		return r.manage(ctx, atlasProject, projectInAtlas.ID)
 	}
 
-	if err = r.ensureX509(ctx, atlasProject); err != nil {
+	// short circuit the "manage" state,
+	// there is no need to wait another reconcile cycle to continue.
+	_, _ = r.manage(ctx, atlasProject, projectInAtlas.ID)
+	atlasProject.Status.ID = projectInAtlas.ID
+
+	if err = r.ensureX509(ctx, atlasProject); err != nil && dryrun.IsNotDryRunError(err) {
 		return r.terminate(ctx, workflow.Internal, err)
 	}
 
